@@ -90,12 +90,19 @@ button,select{font:inherit;color:inherit}
 aside{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px;display:grid;gap:18px}
 fieldset{border:0;padding:0;margin:0;display:grid;gap:10px;min-width:0}
 legend{font:600 12px var(--f-body);text-transform:uppercase;letter-spacing:.08em;color:var(--ink-2);padding:0;margin-bottom:6px}
-label.row{display:flex;align-items:center;gap:10px;cursor:pointer}
+label.row{display:flex;align-items:center;gap:10px;cursor:pointer;min-height:44px}
+label.row:has(input:disabled){cursor:default}
+input:disabled+span{opacity:.5}
 label.row small{display:block;color:var(--ink-2);font-size:12.5px;line-height:1.3}
 input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent);flex:none}
 .field{display:grid;gap:4px;font-size:13px;color:var(--ink-2)}
 select{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%}
 select:disabled{opacity:.5}
+.chips{display:inline-flex;gap:6px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:99px;background:var(--surface-2);border:1px solid var(--line);font-size:12.5px;color:var(--ink-2)}
+.chip::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.hint{font-size:12.5px;color:var(--ink-2)}
+@media (pointer:coarse){.btn.sm,.theme button{min-height:44px}select{min-height:44px}}
 .btn.sm{padding:6px 12px;font-weight:500;font-size:13px}
 .logbox{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 16px}
 .logbox summary{cursor:pointer;font-weight:600}
@@ -148,12 +155,14 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
         </button>
         <button class="btn only only-countdown" id="cancelBtn" type="button">Avbryt</button>
         <span class="timer only only-rec" id="timer">00:00</span>
+        <span class="chips only only-rec" id="chips" aria-label="Aktiva källor"></span>
         <button class="btn only only-rec when-rec" id="pauseBtn" type="button">Pausa</button>
         <button class="btn only only-rec when-paused" id="resumeBtn" type="button">Fortsätt</button>
         <button class="btn only only-rec nopip" id="pipBtn" type="button">Flytande kontroller</button>
         <button class="btn primary only only-rec" id="stopBtn" type="button">
           <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect width="12" height="12" rx="2" fill="currentColor"/></svg> Stoppa
         </button>
+        <span class="hint only only-rec">Mellanslag pausar</span>
 
         <button class="btn accent only only-done" id="dlBtn" type="button">Ladda ner <span id="dlExt">WEBM</span></button>
         <button class="btn only only-done" id="againBtn" type="button">Ny inspelning</button>
@@ -236,9 +245,21 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
   let pipWin = null, pipAllowed = false, pipDecided = true, pipDismissed = false, lastTick = 0;
   let resultUrl = '', resultBlob = null, resultExt = 'webm', cancelCountdown = false;
 
+  // settings that are only read when a recording starts are locked while one is running
+  function syncLocks(st) {
+    const lock = st === 'countdown' || st === 'recording' || st === 'paused';
+    ['fmt', 'optCount', 'optPip'].forEach(id => { $('#' + id).disabled = lock; });
+  }
+  function syncChips() {
+    const names = [];
+    if (micStream) names.push('Mikrofon');
+    if (camStream) names.push('Kamera');
+    if (sysGain && $('#optSys').checked) names.push('Systemljud');
+    $('#chips').replaceChildren(...(names.length ? names : ['Endast bild']).map(n => { const c = document.createElement('span'); c.className = 'chip'; c.textContent = n; return c; }));
+  }
   const baseTitle = document.title;
   let downloaded = false;
-  const setState = s => { if (app.dataset.state !== s) log('Tillstånd: ' + s); app.dataset.state = s; if (s !== 'recording' && s !== 'paused') document.title = baseTitle; syncPip(); };
+  const setState = s => { if (app.dataset.state !== s) log('Tillstånd: ' + s); app.dataset.state = s; syncLocks(s); syncChips(); if (s !== 'recording' && s !== 'paused') document.title = baseTitle; syncPip(); };
   const showWarn = msg => { warn.innerHTML = msg; warn.classList.toggle('show', !!msg); };
   const pad = n => String(n).padStart(2, '0');
   const fmtTime = s => pad(Math.floor(s / 60)) + ':' + pad(Math.floor(s % 60));
@@ -533,7 +554,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
     if (!on) {
       if (camStream) camStream.getTracks().forEach(t => t.stop());
       if (camStream) log('Kamera: av');
-      camStream = null; camVideo = null; return true;
+      camStream = null; camVideo = null; syncChips(); return true;
     }
     if (camStream) return true;
     try {
@@ -542,7 +563,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
       const v = document.createElement('video');
       v.muted = true; v.playsInline = true; v.srcObject = st;
       await v.play().catch(() => {});
-      camStream = st; camVideo = v; log('Kamera: på'); return true;
+      camStream = st; camVideo = v; log('Kamera: på'); syncChips(); return true;
     } catch (e) {
       camStream = camVideo = null;
       log('Kamera: fel ' + (e && e.name)); $('#optCam').checked = false; syncCam(); syncDev();
@@ -569,7 +590,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
       micAn = null; updateMeter();
       if (micStream) micStream.getTracks().forEach(t => t.stop());
       if (micStream) log('Mikrofon: av');
-      micStream = null; return true;
+      micStream = null; syncChips(); return true;
     }
     if (micStream) return true;
     try {
@@ -577,7 +598,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
       if (!audioCtx || micStream) { st.getTracks().forEach(t => t.stop()); return !!micStream; }
       log('Mikrofon: på'); micStream = st; micSrc = audioCtx.createMediaStreamSource(st); micSrc.connect(audioDest);
       micAn = audioCtx.createAnalyser(); micAn.fftSize = 1024; micBuf = new Float32Array(micAn.fftSize); micSrc.connect(micAn);
-      return true;
+      syncChips(); return true;
     } catch (e) {
       micStream = micSrc = null;
       log('Mikrofon: fel ' + (e && e.name)); $('#optMic').checked = false; syncDev();
@@ -590,7 +611,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
   camDev.addEventListener('change', async () => { if (displayStream && camStream) { await setCam(false); await setCam(true); } });
   // switches work during countdown, recording and pause
   $('#optMic').addEventListener('change', e => { if (audioCtx) setMic(e.target.checked); });
-  $('#optSys').addEventListener('change', e => { if (sysGain) sysGain.gain.value = e.target.checked ? 1 : 0; log('Systemljud: ' + (e.target.checked ? 'på' : 'av')); });
+  $('#optSys').addEventListener('change', e => { if (sysGain) sysGain.gain.value = e.target.checked ? 1 : 0; log('Systemljud: ' + (e.target.checked ? 'på' : 'av')); syncChips(); });
   camOpt.addEventListener('change', e => { if (displayStream) setCam(e.target.checked); });
 
   function bubble(W, H) {
@@ -825,7 +846,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
   $('#stopBtn').addEventListener('click', stop);
   $('#cancelBtn').addEventListener('click', () => { cancelCountdown = true; });
   $('#dlBtn').addEventListener('click', () => { save(resultBlob, fileName(resultExt)); downloaded = true; });
-  $('#againBtn').addEventListener('click', () => { result.pause(); result.removeAttribute('src'); status.textContent = ''; showWarn(''); setState('idle'); $('#stage').style.removeProperty('--ar'); $('#stage').style.removeProperty('--arn'); });
+  $('#againBtn').addEventListener('click', () => { if (!downloaded && !confirm('Du har inte sparat inspelningen. Vill du kasta den och börja om?')) return; result.pause(); result.removeAttribute('src'); status.textContent = ''; showWarn(''); setState('idle'); $('#stage').style.removeProperty('--ar'); $('#stage').style.removeProperty('--arn'); });
   // closing the tab would throw away a recording that is running or not yet saved
   window.addEventListener('beforeunload', e => {
     const st = app.dataset.state;
