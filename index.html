@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Skärminspelare</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;600;700&family=Hanken+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: stage (preview/result) on the left, source options on the right, one control bar under the stage. */
+:root{
+  --bg:#e9ecef; --surface:#ffffff; --surface-2:#f3f5f7; --ink:#14181d; --ink-2:#5a6672; --line:#d5dbe1;
+  --rec:#e3342f; --rec-ink:#ffffff; --accent:#0f6b6b; --stage:#0d1114; --stage-ink:#e9eef2;
+  --f-display:"Familjen Grotesk","Segoe UI",system-ui,sans-serif;
+  --f-body:"Hanken Grotesk","Segoe UI",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  --r:10px;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0b0e11; --surface:#151a1f; --surface-2:#1c2228; --ink:#e8edf1; --ink-2:#98a4af; --line:#2a323a;
+  --rec:#f0524d; --accent:#4fc3c0; --stage:#05070a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0b0e11; --surface:#151a1f; --surface-2:#1c2228; --ink:#e8edf1; --ink-2:#98a4af; --line:#2a323a;
+  --rec:#f0524d; --accent:#4fc3c0; --stage:#05070a; color-scheme:dark}
+
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--f-body);padding-inline:clamp(16px,4vw,40px);padding-block:24px 48px}
+.wrap{max-width:1180px;margin-inline:auto;display:flex;flex-direction:column;gap:20px}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap}
+h1{font:700 26px/1.1 var(--f-display);margin:0;letter-spacing:-.01em}
+header p{margin:0;color:var(--ink-2);font-size:14px}
+
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:20px;align-items:start}
+@media (max-width:860px){.grid{grid-template-columns:minmax(0,1fr)}}
+
+.stage{position:relative;background:var(--stage);border-radius:var(--r);aspect-ratio:var(--ar,16/9);width:min(100%,calc(70vh * var(--arn,1.7778)));margin-inline:auto;overflow:hidden;display:grid;place-items:center;color:var(--stage-ink)}
+[data-state="countdown"] .stage,[data-state="recording"] .stage,[data-state="paused"] .stage{touch-action:none}
+.stage video{width:100%;height:100%;object-fit:contain;display:block;background:var(--stage)}
+.empty{text-align:center;padding:24px;max-width:34ch;display:grid;gap:8px;justify-items:center}
+.empty svg{opacity:.55}
+.empty strong{font:600 18px var(--f-display)}
+.empty span{color:#9aa7b2;font-size:14px}
+.badge{position:absolute;top:12px;left:12px;display:none;align-items:center;gap:8px;background:rgba(0,0,0,.6);color:#fff;padding:5px 11px 5px 9px;border-radius:99px;font:500 13px var(--f-mono)}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--rec)}
+[data-state="recording"] .badge,[data-state="paused"] .badge{display:inline-flex}
+[data-state="recording"] .dot{animation:pulse 1.2s ease-in-out infinite}
+[data-state="paused"] .dot{background:#f5b301}
+@keyframes pulse{50%{opacity:.25}}
+.count{position:absolute;inset:0;display:none;place-items:center;background:rgba(0,0,0,.45);color:#fff;font:700 clamp(72px,14vw,160px) var(--f-display)}
+[data-state="countdown"] .count{display:grid}
+
+.bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px}
+.timer{font:500 22px var(--f-mono);font-variant-numeric:tabular-nums;min-width:5.2ch}
+.spacer{flex:1}
+button,select{font:inherit;color:inherit}
+.btn{border:1px solid var(--line);background:var(--surface);padding:10px 16px;border-radius:var(--r);cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:8px}
+.btn:hover{background:var(--surface-2)}
+.btn.primary{background:var(--rec);border-color:var(--rec);color:var(--rec-ink)}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn.accent{background:var(--accent);border-color:var(--accent);color:var(--bg)}
+.btn.nopip{display:none!important}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+
+/* which controls show in which state */
+.only{display:none}
+[data-state="idle"] .only-idle,
+[data-state="countdown"] .only-countdown,
+[data-state="recording"] .only-rec,
+[data-state="paused"] .only-rec,
+[data-state="done"] .only-done{display:inline-flex}
+[data-state="paused"] .when-rec{display:none}
+.when-paused{display:none}
+[data-state="paused"] .when-paused{display:inline-flex}
+[data-state="done"] #empty,[data-state="recording"] #empty,[data-state="paused"] #empty,[data-state="countdown"] #empty{display:none}
+#preview,#result{display:none}
+[data-state="countdown"] #preview,[data-state="recording"] #preview,[data-state="paused"] #preview{display:block}
+[data-state="done"] #result{display:block}
+
+aside{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:18px;display:grid;gap:18px}
+fieldset{border:0;padding:0;margin:0;display:grid;gap:10px;min-width:0}
+legend{font:600 12px var(--f-body);text-transform:uppercase;letter-spacing:.08em;color:var(--ink-2);padding:0;margin-bottom:6px}
+label.row{display:flex;align-items:center;gap:10px;cursor:pointer}
+label.row small{display:block;color:var(--ink-2);font-size:12.5px;line-height:1.3}
+input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent);flex:none}
+.field{display:grid;gap:4px;font-size:13px;color:var(--ink-2)}
+select{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%}
+select:disabled{opacity:.5}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.note{font-size:13px;color:var(--ink-2);margin:0}
+.warn{display:none;background:var(--surface-2);border:1px solid var(--rec);border-radius:var(--r);padding:12px 14px;font-size:14px}
+.warn.show{display:block}
+.status{font-size:13px;color:var(--ink-2)}
+code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padding:1px 5px;border-radius:5px;overflow-wrap:anywhere}
+@media (prefers-reduced-motion:reduce){.dot{animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap" id="app" data-state="idle">
+  <header>
+    <h1>Skärminspelare</h1>
+    <p>Spela in skärm, fönster eller flik. Allt sker i din webbläsare, inget laddas upp.</p>
+  </header>
+
+  <div class="warn" id="warn" role="alert"></div>
+
+  <div class="grid">
+    <section>
+      <div class="stage" id="stage">
+        <div class="empty" id="empty">
+          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/><circle cx="12" cy="10.5" r="2.6" fill="currentColor" stroke="none"/></svg>
+          <strong>Redo att spela in</strong>
+          <span>Tryck på Starta, välj vad som ska delas i webbläsarens ruta, så börjar nedräkningen.</span>
+        </div>
+        <video id="preview" muted playsinline></video>
+        <video id="result" controls playsinline></video>
+        <div class="badge"><span class="dot"></span><span id="badgeTime">00:00</span></div>
+        <div class="count" id="count" aria-live="assertive"></div>
+      </div>
+
+      <div class="bar">
+        <button class="btn primary only only-idle" id="startBtn" type="button">
+          <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="currentColor"/></svg> Starta inspelning
+        </button>
+        <button class="btn only only-countdown" id="cancelBtn" type="button">Avbryt</button>
+        <span class="timer only only-rec" id="timer">00:00</span>
+        <button class="btn only only-rec when-rec" id="pauseBtn" type="button">Pausa</button>
+        <button class="btn only only-rec when-paused" id="resumeBtn" type="button">Fortsätt</button>
+        <button class="btn only only-rec nopip" id="pipBtn" type="button">Flytande kontroller</button>
+        <button class="btn primary only only-rec" id="stopBtn" type="button">
+          <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect width="12" height="12" rx="2" fill="currentColor"/></svg> Stoppa
+        </button>
+
+        <button class="btn accent only only-done" id="dlBtn" type="button">Ladda ner <span id="dlExt">WEBM</span></button>
+        <button class="btn only only-done" id="againBtn" type="button">Ny inspelning</button>
+        <span class="status" id="status"></span>
+      </div>
+      <p class="note only-done only" id="doneNote" style="margin-top:12px"></p>
+    </section>
+
+    <aside>
+      <fieldset id="srcSet">
+        <legend>Ljud och bild</legend>
+        <label class="row"><input type="checkbox" id="optMic"><span>Mikrofon<small>Din röst i inspelningen</small></span></label>
+        <label class="row"><input type="checkbox" id="optSys"><span>Systemljud<small>Ljud från skärmen eller fliken (Chrome och Edge)</small></span></label>
+        <label class="row"><input type="checkbox" id="optCam"><span>Webbkamera<small>Rund bubbla i ett hörn av bilden</small></span></label>
+      </fieldset>
+
+      <fieldset id="camSet">
+        <legend>Kamerabubbla</legend>
+        <div class="two">
+          <label class="field">Placering
+            <select id="camPos">
+              <option value="br">Nere höger</option>
+              <option value="bl">Nere vänster</option>
+              <option value="tr">Uppe höger</option>
+              <option value="tl">Uppe vänster</option>
+              <option value="custom">Egen (dra bubblan)</option>
+            </select>
+          </label>
+          <label class="field">Storlek
+            <select id="camSize">
+              <option value="0.18">Liten</option>
+              <option value="0.26" selected>Medel</option>
+              <option value="0.36">Stor</option>
+            </select>
+          </label>
+        </div>
+        <p class="note">Under inspelningen kan du dra bubblan i förhandsvisningen dit du vill ha den.</p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Inspelning</legend>
+        <label class="field">Format
+          <select id="fmt">
+            <option value="auto">MP4 om möjligt, annars WebM</option>
+            <option value="webm">Alltid WebM</option>
+          </select>
+        </label>
+        <label class="row"><input type="checkbox" id="optCount" checked><span>Nedräkning, 3 sekunder</span></label>
+        <label class="row"><input type="checkbox" id="optPip" checked><span>Öppna flytande kontroller<small>Chrome och Edge, bara när du delar ett fönster eller en flik</small></span></label>
+        <p class="note" id="mimeNote"></p>
+      </fieldset>
+    </aside>
+  </div>
+</div>
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const app = $('#app'), preview = $('#preview'), result = $('#result');
+  const warn = $('#warn'), status = $('#status');
+  let displayStream, camStream, micStream, audioCtx, audioDest, micSrc, sysGain, recorder, chunks = [], mime = '';
+  let worker, canvasStream, screenVideo, camVideo, liveCanvas;
+  let camFx = 1, camFy = 1; // bubble position: 0..1 across the free area, (1,1) = bottom right
+  let t0 = 0, pausedMs = 0, pauseAt = 0, tick = 0, elapsed = 0;
+  let pipWin = null, pipAllowed = false, pipDecided = true, pipDismissed = false, lastTick = 0;
+  let resultUrl = '', resultBlob = null, resultExt = 'webm', cancelCountdown = false;
+
+  const setState = s => { app.dataset.state = s; syncPip(); };
+  const showWarn = msg => { warn.innerHTML = msg; warn.classList.toggle('show', !!msg); };
+  const pad = n => String(n).padStart(2, '0');
+  const fmtTime = s => pad(Math.floor(s / 60)) + ':' + pad(Math.floor(s % 60));
+  const setAspect = (w, h) => { const r = Math.min(2.4, Math.max(0.45, w / h)); const st = $('#stage'); st.style.setProperty('--ar', w + ' / ' + h); st.style.setProperty('--arn', r); if (r !== w / h) st.style.setProperty('--ar', String(r)); };
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  /* ---------- format ---------- */
+  function pickMime() {
+    if (!window.MediaRecorder) return '';
+    const mp4 = ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4'];
+    const webm = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'];
+    const list = $('#fmt').value === 'webm' ? webm : mp4.concat(webm);
+    return list.find(t => MediaRecorder.isTypeSupported(t)) || '';
+  }
+  function updateMimeNote() {
+    const m = pickMime();
+    $('#mimeNote').textContent = !m ? 'Webbläsaren saknar stöd för inspelning.' :
+      m.startsWith('video/mp4') ? 'Din webbläsare spelar in direkt i MP4.' :
+      'Din webbläsare spelar in i WebM. MP4 stöds i Chrome, Edge och Safari.';
+  }
+  $('#fmt').addEventListener('change', updateMimeNote);
+  updateMimeNote();
+
+  const camOpt = $('#optCam'), camSet = $('#camSet');
+  const syncCam = () => camSet.disabled = !camOpt.checked;
+  camOpt.addEventListener('change', syncCam); syncCam();
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia || !window.MediaRecorder) {
+    showWarn('Den här webbläsaren kan inte spela in skärmen. Öppna filen i en aktuell version av Chrome, Edge, Safari eller Firefox.');
+    $('#startBtn').disabled = true;
+  }
+
+  /* ---------- start ---------- */
+  let starting = false;
+  async function start() {
+    if (starting) return;
+    starting = true;
+    // A floating window may only be opened straight from a click, so ask for it now and close it again
+    // once we know the whole screen is shared.
+    pipDecided = false; pipDismissed = false;
+    if ($('#optPip').checked && 'documentPictureInPicture' in window) openPip(true); else pipDecided = true;
+    try { await run(); }
+    catch (e) {
+      cleanup(); setState('idle');
+      showWarn('Inspelningen kunde inte startas: ' + (e && e.message || e) + '. Prova att välja Alltid WebM under Format.');
+    } finally { starting = false; }
+  }
+  async function run() {
+    showWarn('');
+    mime = pickMime();
+    if (!mime) { showWarn('Webbläsaren saknar stöd för inspelning.'); return; }
+    try {
+      displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 30 }, audio: $('#optSys').checked
+      });
+    } catch (e) {
+      cleanup();
+      if (e && e.name === 'NotAllowedError') {
+        showWarn('Ingen skärm delades. Om du inte avbröt själv blockerar sidan skärmdelning. Spara filen på din dator och öppna den direkt i webbläsaren, inte i en förhandsvisning.');
+      } else showWarn('Kunde inte starta skärmdelning: ' + (e && e.message || e));
+      return;
+    }
+    // floating controls only make sense when the shared surface does not include them (not the whole screen)
+    const surface = (displayStream.getVideoTracks()[0].getSettings() || {}).displaySurface;
+    pipAllowed = 'documentPictureInPicture' in window && surface !== 'monitor';
+    pipDecided = true; pipDismissed = false;
+    if (!pipAllowed) closePip();
+    syncPip();
+    // stop if the user clicks the browser's own "Stop sharing" button
+    displayStream.getVideoTracks()[0].addEventListener('ended', () => {
+      if (app.dataset.state === 'countdown') { cancelCountdown = true; }
+      else if (recorder && recorder.state !== 'inactive') stop();
+    });
+
+    // preview + optional camera composite
+    screenVideo = document.createElement('video');
+    screenVideo.muted = true; screenVideo.playsInline = true; screenVideo.srcObject = displayStream;
+    await screenVideo.play().catch(() => {});
+    if (!screenVideo.videoWidth) await new Promise(r => screenVideo.addEventListener('loadedmetadata', r, { once: true }));
+
+    // Always go through a canvas: it caps the size (a 5K Retina screen is too large for the H.264 encoder and
+    // makes the recorder stop at once) and lets the camera bubble be drawn in.
+    camVideo = null;
+    if ($('#optCam').checked) await setCam(true);
+    const canvas = document.createElement('canvas');
+    const sw = screenVideo.videoWidth, sh = screenVideo.videoHeight;
+    const k = Math.min(1, 1920 / sw, 1080 / sh);
+    canvas.width = Math.max(160, Math.round(sw * k / 2) * 2); canvas.height = Math.max(160, Math.round(sh * k / 2) * 2);
+    setAspect(canvas.width, canvas.height);
+    liveCanvas = canvas;
+    const ctx = canvas.getContext('2d');
+    const draw = () => drawComposite(ctx, canvas);
+    draw();
+    // A worker timer keeps ticking while this tab is in the background, which is where it is while you record another window.
+    worker = new Worker(URL.createObjectURL(new Blob(['setInterval(()=>postMessage(0),33)'], { type: 'text/javascript' })));
+    worker.onmessage = () => {
+      draw();
+      if (Date.now() - lastTick > 250) { lastTick = Date.now(); if (['recording', 'paused'].includes(app.dataset.state)) updateTimer(); }
+    };
+    canvasStream = canvas.captureStream(30);
+    const videoTrack = canvasStream.getVideoTracks()[0];
+    preview.srcObject = canvasStream;
+    preview.play().catch(() => {});
+    syncPip();
+
+    // audio mix: microphone + system audio into one track
+    const tracks = [videoTrack];
+    // The mix always exists so the microphone can be switched on later. System audio can only be
+    // shared when the screen is picked, so after that it can only be muted and unmuted.
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioDest = audioCtx.createMediaStreamDestination();
+    audioCtx.resume().catch(() => {});
+    const sysTracks = displayStream.getAudioTracks();
+    if (sysTracks.length) {
+      sysGain = audioCtx.createGain();
+      audioCtx.createMediaStreamSource(new MediaStream(sysTracks)).connect(sysGain);
+      sysGain.connect(audioDest);
+      sysGain.gain.value = $('#optSys').checked ? 1 : 0;
+    } else if ($('#optSys').checked) {
+      showWarn('Inget systemljud delades. I rutan där du väljer skärm måste du kryssa i att dela ljud, och det går bara för flikar (och hela skärmen i Windows).');
+      $('#optSys').checked = false;
+    }
+    $('#optSys').disabled = !sysGain;
+    if ($('#optMic').checked) await setMic(true);
+    tracks.push(audioDest.stream.getAudioTracks()[0]);
+
+    // countdown
+    cancelCountdown = false;
+    if ($('#optCount').checked) {
+      setState('countdown');
+      for (let n = 3; n >= 1 && !cancelCountdown; n--) {
+        $('#count').textContent = n; syncPip();
+        for (let i = 0; i < 10 && !cancelCountdown; i++) await sleep(100);
+      }
+      if (cancelCountdown) { cleanup(); setState('idle'); return; }
+    }
+
+    chunks = [];
+    // An MP4 type that names an audio codec can fail when there is no audio track.
+    if (tracks.length === 1 && mime.startsWith('video/mp4;codecs=avc1,')) {
+      const alt = ['video/mp4;codecs=avc1', 'video/mp4'].find(t => MediaRecorder.isTypeSupported(t));
+      if (alt) mime = alt;
+    }
+    recorder = new MediaRecorder(new MediaStream(tracks), { mimeType: mime, videoBitsPerSecond: 5e6, audioBitsPerSecond: 128e3 });
+    recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+    recorder.onstop = finish;
+    recorder.onerror = e => showWarn('Inspelningen avbröts: ' + ((e.error && e.error.message) || 'okänt fel') + '. Prova att välja Alltid WebM under Format.');
+    recorder.start(1000);
+    t0 = Date.now(); pausedMs = 0;
+    setState('recording');
+    tick = setInterval(updateTimer, 250); updateTimer();
+    if (pipAllowed) {
+      try { navigator.mediaSession.setActionHandler('enterpictureinpicture', () => { if (!pipDismissed) openPip(); }); } catch (e) {}
+    }
+  }
+
+  async function setCam(on) {
+    if (!on) {
+      if (camStream) camStream.getTracks().forEach(t => t.stop());
+      camStream = null; camVideo = null; return true;
+    }
+    if (camStream) return true;
+    try {
+      const st = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
+      if (!displayStream || camStream) { st.getTracks().forEach(t => t.stop()); return !!camStream; }
+      const v = document.createElement('video');
+      v.muted = true; v.playsInline = true; v.srcObject = st;
+      await v.play().catch(() => {});
+      camStream = st; camVideo = v; return true;
+    } catch (e) {
+      camStream = camVideo = null;
+      $('#optCam').checked = false; syncCam();
+      showWarn('Webbkameran gick inte att använda, inspelningen fortsätter utan den.');
+      return false;
+    }
+  }
+  async function setMic(on) {
+    if (!audioCtx) return false;
+    if (!on) {
+      if (micSrc) { micSrc.disconnect(); micSrc = null; }
+      if (micStream) micStream.getTracks().forEach(t => t.stop());
+      micStream = null; return true;
+    }
+    if (micStream) return true;
+    try {
+      const st = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      if (!audioCtx || micStream) { st.getTracks().forEach(t => t.stop()); return !!micStream; }
+      micStream = st; micSrc = audioCtx.createMediaStreamSource(st); micSrc.connect(audioDest); return true;
+    } catch (e) {
+      micStream = micSrc = null;
+      $('#optMic').checked = false;
+      showWarn('Mikrofonen gick inte att använda, inspelningen fortsätter utan ljud från den.');
+      return false;
+    }
+  }
+  // switches work during countdown, recording and pause
+  $('#optMic').addEventListener('change', e => { if (audioCtx) setMic(e.target.checked); });
+  $('#optSys').addEventListener('change', e => { if (sysGain) sysGain.gain.value = e.target.checked ? 1 : 0; });
+  camOpt.addEventListener('change', e => { if (displayStream) setCam(e.target.checked); });
+
+  function bubble(W, H) {
+    const S = Math.min(W, H), d = Math.round(S * parseFloat($('#camSize').value)), m = Math.round(S * 0.035);
+    return { d, m, x: m + camFx * Math.max(0, W - 2 * m - d), y: m + camFy * Math.max(0, H - 2 * m - d) };
+  }
+
+  /* ---------- movable camera bubble ---------- */
+  const PRESETS = { br: [1, 1], bl: [0, 1], tr: [1, 0], tl: [0, 0] };
+  const camPos = $('#camPos'), stageEl = $('#stage');
+  camPos.addEventListener('change', () => { const p = PRESETS[camPos.value]; if (p) [camFx, camFy] = p; });
+  let drag = null;
+  const live = () => ['countdown', 'recording', 'paused'].includes(app.dataset.state) && camVideo && liveCanvas;
+  function toCanvas(e) {
+    const r = stageEl.getBoundingClientRect(), k = Math.min(r.width / liveCanvas.width, r.height / liveCanvas.height);
+    return { x: (e.clientX - r.left - (r.width - liveCanvas.width * k) / 2) / k, y: (e.clientY - r.top - (r.height - liveCanvas.height * k) / 2) / k };
+  }
+  function overBubble(p) {
+    const g = bubble(liveCanvas.width, liveCanvas.height);
+    return Math.hypot(p.x - g.x - g.d / 2, p.y - g.y - g.d / 2) <= g.d / 2 + 8;
+  }
+  stageEl.addEventListener('pointerdown', e => {
+    if (!live()) return;
+    const p = toCanvas(e), g = bubble(liveCanvas.width, liveCanvas.height);
+    if (!overBubble(p)) return;
+    drag = { dx: p.x - g.x - g.d / 2, dy: p.y - g.y - g.d / 2 };
+    stageEl.setPointerCapture(e.pointerId); stageEl.style.cursor = 'grabbing'; e.preventDefault();
+  });
+  stageEl.addEventListener('pointermove', e => {
+    if (!live()) { stageEl.style.cursor = ''; return; }
+    const p = toCanvas(e);
+    if (!drag) { stageEl.style.cursor = overBubble(p) ? 'grab' : ''; return; }
+    const W = liveCanvas.width, H = liveCanvas.height, g = bubble(W, H);
+    const rx = W - 2 * g.m - g.d, ry = H - 2 * g.m - g.d;
+    camFx = rx > 0 ? Math.min(1, Math.max(0, (p.x - drag.dx - g.d / 2 - g.m) / rx)) : 0.5;
+    camFy = ry > 0 ? Math.min(1, Math.max(0, (p.y - drag.dy - g.d / 2 - g.m) / ry)) : 0.5;
+    camPos.value = 'custom';
+  });
+  const endDrag = () => { drag = null; stageEl.style.cursor = ''; };
+  stageEl.addEventListener('pointerup', endDrag);
+  stageEl.addEventListener('pointercancel', endDrag);
+
+  function drawComposite(ctx, canvas) {
+    const W = canvas.width, H = canvas.height;
+    const vw = screenVideo.videoWidth || W, vh = screenVideo.videoHeight || H;
+    const s = Math.min(W / vw, H / vh), dw = vw * s, dh = vh * s;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    ctx.drawImage(screenVideo, (W - dw) / 2, (H - dh) / 2, dw, dh);
+    if (!camVideo || !camVideo.videoWidth) return;
+    const g = bubble(W, H), d = g.d, cx = g.x + d / 2, cy = g.y + d / 2;
+    const cw = camVideo.videoWidth, ch = camVideo.videoHeight, cs = Math.min(cw, ch);
+    ctx.save();
+    ctx.beginPath(); ctx.arc(cx, cy, d / 2, 0, Math.PI * 2); ctx.clip();
+    ctx.translate(cx + d / 2, cy - d / 2); ctx.scale(-1, 1); // mirrored self-view
+    ctx.drawImage(camVideo, (cw - cs) / 2, (ch - cs) / 2, cs, cs, 0, 0, d, d);
+    ctx.restore();
+    ctx.lineWidth = Math.max(3, d * 0.025); ctx.strokeStyle = '#fff';
+    ctx.beginPath(); ctx.arc(cx, cy, d / 2, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  function updateTimer() {
+    const ms = (app.dataset.state === 'paused' ? pauseAt : Date.now()) - t0 - pausedMs;
+    elapsed = Math.max(0, ms / 1000);
+    $('#timer').textContent = $('#badgeTime').textContent = fmtTime(elapsed);
+    syncPip();
+  }
+
+  /* ---------- floating controls (Document Picture-in-Picture) ---------- */
+  const pipBtn = $('#pipBtn');
+  function openPip(early) {
+    if (pipWin || !(early || pipAllowed)) return;
+    documentPictureInPicture.requestWindow({ width: 380, height: 300 }).then(w => {
+      if (pipDecided && !pipAllowed) { w.close(); return; }
+      pipWin = w; pipDismissed = false;
+      const d = w.document;
+      d.title = 'Skärminspelare';
+      d.head.insertAdjacentHTML('beforeend', '<style>' +
+        'html,body{height:100%}body{margin:0;box-sizing:border-box;display:flex;flex-direction:column;background:#151a1f;color:#e8edf1;font:600 14px system-ui,sans-serif}' +
+        '.v{position:relative;flex:1;min-height:0;background:#000;display:grid;place-items:center}.v video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}' +
+        '.ph{position:absolute;inset:0;display:grid;place-items:center;padding:16px;text-align:center;color:#98a4af;font-weight:500}' +
+        '.c{position:absolute;inset:0;display:none;place-items:center;background:rgba(0,0,0,.45);color:#fff;font:700 96px system-ui,sans-serif}' +
+        '.bar{display:flex;align-items:center;gap:10px;padding:10px 12px}' +
+        '.dot{width:10px;height:10px;border-radius:50%;background:#f0524d;flex:none}.t{font:500 20px ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;flex:1}' +
+        'button{font:inherit;border:1px solid #2a323a;background:#1c2228;color:inherit;padding:8px 12px;border-radius:8px;cursor:pointer}' +
+        'button:hover{filter:brightness(1.2)}button:disabled{opacity:.45;cursor:default}.stop{background:#f0524d;border-color:#f0524d;color:#fff}</style>');
+      d.body.innerHTML = '<div class="v"><video id="v" muted playsinline autoplay></video><div class="ph" id="ph">Välj vad som ska delas i webbläsarens ruta.</div><div class="c" id="c"></div></div>' +
+        '<div class="bar"><span class="dot" id="d"></span><span class="t" id="t">00:00</span><button id="p" type="button">Pausa</button><button id="s" class="stop" type="button">Stoppa</button></div>';
+      d.getElementById('p').onclick = () => app.dataset.state === 'paused' ? resume() : pause();
+      d.getElementById('s').onclick = stop;
+      w.addEventListener('pagehide', () => { pipWin = null; pipDismissed = true; syncPip(); });
+      syncPip();
+    }).catch(() => {});
+  }
+  function closePip() { if (pipWin) { const w = pipWin; pipWin = null; w.close(); } }
+  function syncPip() {
+    const live = ['recording', 'paused'].includes(app.dataset.state);
+    pipBtn.classList.toggle('nopip', !pipAllowed);
+    pipBtn.textContent = pipWin ? 'Stäng flytande kontroller' : 'Flytande kontroller';
+    if (!pipWin) return;
+    const d = pipWin.document, st = app.dataset.state, paused = st === 'paused';
+    const t = d.getElementById('t'), p = d.getElementById('p'), dot = d.getElementById('d');
+    const v = d.getElementById('v'), c = d.getElementById('c'), ph = d.getElementById('ph');
+    if (!t) return;
+    if (preview.srcObject && v.srcObject !== preview.srcObject) { v.srcObject = preview.srcObject; v.play().catch(() => {}); }
+    ph.style.display = v.srcObject ? 'none' : 'grid';
+    c.style.display = st === 'countdown' ? 'grid' : 'none';
+    c.textContent = $('#count').textContent;
+    t.textContent = live ? fmtTime(elapsed) : '00:00';
+    p.textContent = paused ? 'Fortsätt' : 'Pausa';
+    p.disabled = !live;
+    dot.style.background = paused ? '#f5b301' : '#f0524d';
+  }
+  pipBtn.addEventListener('click', () => { if (pipWin) { pipDismissed = true; closePip(); syncPip(); } else openPip(); });
+
+  function pause() {
+    if (recorder && recorder.state === 'recording') { recorder.pause(); pauseAt = Date.now(); setState('paused'); updateTimer(); }
+  }
+  function resume() {
+    if (recorder && recorder.state === 'paused') { recorder.resume(); pausedMs += Date.now() - pauseAt; setState('recording'); }
+  }
+  function stop() {
+    if (recorder && recorder.state !== 'inactive') {
+      if (app.dataset.state === 'paused') pausedMs += Date.now() - pauseAt;
+      updateTimer(); clearInterval(tick);
+      recorder.stop();
+    }
+  }
+
+  function cleanup() {
+    clearInterval(tick);
+    closePip(); pipAllowed = false; pipDecided = true; syncPip();
+    try { navigator.mediaSession.setActionHandler('enterpictureinpicture', null); } catch (e) {}
+    [displayStream, camStream, micStream, canvasStream].forEach(s => s && s.getTracks().forEach(t => t.stop()));
+    if (worker) { worker.terminate(); worker = null; }
+    if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+    displayStream = camStream = micStream = canvasStream = liveCanvas = camVideo = micSrc = sysGain = audioDest = null;
+    $('#optSys').disabled = false;
+    preview.srcObject = null;
+  }
+
+  function finish() {
+    const dur = elapsed;
+    cleanup();
+    if (!chunks.length) { if (!warn.classList.contains('show')) showWarn('Inspelningen blev tom. Prova att välja Alltid WebM under Format.'); setState('idle'); return; }
+    resultBlob = new Blob(chunks, { type: mime.split(';')[0] });
+    resultExt = mime.startsWith('video/mp4') ? 'mp4' : 'webm';
+    if (resultUrl) URL.revokeObjectURL(resultUrl);
+    resultUrl = URL.createObjectURL(resultBlob);
+    result.src = resultUrl;
+    $('#dlExt').textContent = resultExt.toUpperCase();
+    const mb = (resultBlob.size / 1048576).toFixed(1);
+    $('#doneNote').textContent = fmtTime(dur) + ' lång, ' + mb + ' MB' +
+      (resultExt === 'webm' ? '. WebM spelas i de flesta webbläsare. För MP4: kör ffmpeg -i fil.webm fil.mp4' : '.');
+    status.textContent = '';
+    result.dataset.dur = dur;
+    result.onloadedmetadata = () => { if (result.videoWidth) setAspect(result.videoWidth, result.videoHeight); };
+    setState('done');
+  }
+
+  function fileName(ext) {
+    const d = new Date();
+    return 'skarminspelning-' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + '.' + ext;
+  }
+  function save(blob, name) {
+    const u = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(u), 10000);
+  }
+
+  /* ---------- wiring ---------- */
+  $('#startBtn').addEventListener('click', start);
+  $('#pauseBtn').addEventListener('click', pause);
+  $('#resumeBtn').addEventListener('click', resume);
+  $('#stopBtn').addEventListener('click', stop);
+  $('#cancelBtn').addEventListener('click', () => { cancelCountdown = true; });
+  $('#dlBtn').addEventListener('click', () => save(resultBlob, fileName(resultExt)));
+  $('#againBtn').addEventListener('click', () => { result.pause(); result.removeAttribute('src'); status.textContent = ''; showWarn(''); setState('idle'); $('#stage').style.removeProperty('--ar'); $('#stage').style.removeProperty('--arn'); });
+  window.addEventListener('keydown', e => {
+    if (e.code === 'Escape' && app.dataset.state === 'countdown') { cancelCountdown = true; return; }
+    if (e.target.matches('input,select,textarea')) return;
+    if (e.code === 'Space' && app.dataset.state === 'recording') { e.preventDefault(); pause(); }
+    else if (e.code === 'Space' && app.dataset.state === 'paused') { e.preventDefault(); resume(); }
+  });
+})();
+</script>
+</body>
+</html>
