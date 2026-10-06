@@ -532,6 +532,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
   async function setCam(on) {
     if (!on) {
       if (camStream) camStream.getTracks().forEach(t => t.stop());
+      if (camStream) log('Kamera: av');
       camStream = null; camVideo = null; return true;
     }
     if (camStream) return true;
@@ -567,6 +568,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
       if (micSrc) { micSrc.disconnect(); micSrc = null; }
       micAn = null; updateMeter();
       if (micStream) micStream.getTracks().forEach(t => t.stop());
+      if (micStream) log('Mikrofon: av');
       micStream = null; return true;
     }
     if (micStream) return true;
@@ -588,7 +590,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
   camDev.addEventListener('change', async () => { if (displayStream && camStream) { await setCam(false); await setCam(true); } });
   // switches work during countdown, recording and pause
   $('#optMic').addEventListener('change', e => { if (audioCtx) setMic(e.target.checked); });
-  $('#optSys').addEventListener('change', e => { if (sysGain) sysGain.gain.value = e.target.checked ? 1 : 0; });
+  $('#optSys').addEventListener('change', e => { if (sysGain) sysGain.gain.value = e.target.checked ? 1 : 0; log('Systemljud: ' + (e.target.checked ? 'på' : 'av')); });
   camOpt.addEventListener('change', e => { if (displayStream) setCam(e.target.checked); });
 
   function bubble(W, H) {
