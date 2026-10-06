@@ -96,6 +96,7 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent);flex:none
 .field{display:grid;gap:4px;font-size:13px;color:var(--ink-2)}
 select{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%}
 select:disabled{opacity:.5}
+.dev{margin:-4px 0 0 28px}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .note{font-size:13px;color:var(--ink-2);margin:0}
 .warn{display:none;background:var(--surface-2);border:1px solid var(--rec);border-radius:var(--r);padding:12px 14px;font-size:14px}
@@ -157,8 +158,10 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
       <fieldset id="srcSet">
         <legend>Ljud och bild</legend>
         <label class="row"><input type="checkbox" id="optMic"><span>Mikrofon<small>Din röst i inspelningen</small></span></label>
+        <label class="field dev">Välj mikrofon<select id="micDev"><option value="">Standard</option></select></label>
         <label class="row"><input type="checkbox" id="optSys"><span>Systemljud<small>Ljud från skärmen eller fliken (Chrome och Edge)</small></span></label>
         <label class="row"><input type="checkbox" id="optCam"><span>Webbkamera<small>Rund bubbla i ett hörn av bilden</small></span></label>
+        <label class="field dev">Välj kamera<select id="camDev"><option value="">Standard</option></select></label>
       </fieldset>
 
       <fieldset id="camSet">
@@ -222,7 +225,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   /* ---------- remembered settings ---------- */
-  const SETTINGS = ['optMic', 'optSys', 'optCam', 'camPos', 'camSize', 'fmt', 'optCount', 'optPip'];
+  const SETTINGS = ['optMic', 'optSys', 'optCam', 'micDev', 'camDev', 'camPos', 'camSize', 'fmt', 'optCount', 'optPip'];
   try {
     const saved = JSON.parse(localStorage.getItem('settings') || '{}');
     SETTINGS.forEach(id => {
@@ -235,6 +238,43 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
   $('aside').addEventListener('change', () => {
     try { localStorage.setItem('settings', JSON.stringify(Object.fromEntries(SETTINGS.map(id => { const el = $('#' + id); return [id, el.type === 'checkbox' ? el.checked : el.value]; })))); } catch (e) {}
   });
+
+  /* ---------- choose camera and microphone ---------- */
+  // Device ids and names are only listed once the browser has granted access, so the lists are refreshed after each grant.
+  const micDev = $('#micDev'), camDev = $('#camDev');
+  let pendingDev = {};
+  try { const sv = JSON.parse(localStorage.getItem('settings') || '{}'); pendingDev = { micDev: sv.micDev || '', camDev: sv.camDev || '' }; } catch (e) {}
+  [micDev, camDev].forEach(sel => sel.addEventListener('change', () => { pendingDev[sel.id] = sel.value; }));
+  const syncDev = () => { micDev.disabled = !$('#optMic').checked; camDev.disabled = !$('#optCam').checked; };
+  $('#optMic').addEventListener('change', syncDev); $('#optCam').addEventListener('change', syncDev); syncDev();
+  async function populateDevices() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    let list = [];
+    try { list = await navigator.mediaDevices.enumerateDevices(); } catch (e) { return; }
+    [[micDev, 'audioinput', 'Mikrofon'], [camDev, 'videoinput', 'Kamera']].forEach(([sel, kind, name]) => {
+      const want = sel.value || pendingDev[sel.id] || '';
+      sel.replaceChildren(new Option('Standard', ''));
+      list.filter(d => d.kind === kind && d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications')
+        .forEach((d, i) => sel.add(new Option(d.label || name + ' ' + (i + 1), d.deviceId)));
+      sel.value = [...sel.options].some(o => o.value === want) ? want : '';
+    });
+  }
+  async function getDevice(kind) {
+    const video = kind === 'video', sel = video ? camDev : micDev;
+    const base = video ? { width: 640, height: 480 } : { echoCancellation: true, noiseSuppression: true };
+    const plain = video ? { ...base, facingMode: 'user' } : base;
+    try {
+      const st = await navigator.mediaDevices.getUserMedia({ [kind]: sel.value ? { ...base, deviceId: { exact: sel.value } } : plain });
+      populateDevices(); return st;
+    } catch (e) {
+      if (!sel.value || (e.name !== 'OverconstrainedError' && e.name !== 'NotFoundError')) throw e;
+      sel.value = ''; pendingDev[sel.id] = ''; // the chosen device is gone, use the default one
+      const st = await navigator.mediaDevices.getUserMedia({ [kind]: plain });
+      populateDevices(); return st;
+    }
+  }
+  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', populateDevices);
+  populateDevices();
 
   /* ---------- theme ---------- */
   const themeBox = $('#theme'), themeBtns = [...themeBox.querySelectorAll('button')];
@@ -415,7 +455,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
     }
     if (camStream) return true;
     try {
-      const st = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
+      const st = await getDevice('video');
       if (!displayStream || camStream) { st.getTracks().forEach(t => t.stop()); return !!camStream; }
       const v = document.createElement('video');
       v.muted = true; v.playsInline = true; v.srcObject = st;
@@ -423,7 +463,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
       camStream = st; camVideo = v; return true;
     } catch (e) {
       camStream = camVideo = null;
-      $('#optCam').checked = false; syncCam();
+      $('#optCam').checked = false; syncCam(); syncDev();
       showWarn('Webbkameran gick inte att använda, inspelningen fortsätter utan den.');
       return false;
     }
@@ -437,16 +477,19 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
     }
     if (micStream) return true;
     try {
-      const st = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      const st = await getDevice('audio');
       if (!audioCtx || micStream) { st.getTracks().forEach(t => t.stop()); return !!micStream; }
       micStream = st; micSrc = audioCtx.createMediaStreamSource(st); micSrc.connect(audioDest); return true;
     } catch (e) {
       micStream = micSrc = null;
-      $('#optMic').checked = false;
+      $('#optMic').checked = false; syncDev();
       showWarn('Mikrofonen gick inte att använda, inspelningen fortsätter utan ljud från den.');
       return false;
     }
   }
+  // changing device during a recording swaps the source
+  micDev.addEventListener('change', async () => { if (audioCtx && micStream) { await setMic(false); await setMic(true); } });
+  camDev.addEventListener('change', async () => { if (displayStream && camStream) { await setCam(false); await setCam(true); } });
   // switches work during countdown, recording and pause
   $('#optMic').addEventListener('change', e => { if (audioCtx) setMic(e.target.checked); });
   $('#optSys').addEventListener('change', e => { if (sysGain) sysGain.gain.value = e.target.checked ? 1 : 0; });
