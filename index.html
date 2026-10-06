@@ -96,6 +96,11 @@ input[type=checkbox]{width:18px;height:18px;accent-color:var(--accent);flex:none
 .field{display:grid;gap:4px;font-size:13px;color:var(--ink-2)}
 select{background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%}
 select:disabled{opacity:.5}
+.btn.sm{padding:6px 12px;font-weight:500;font-size:13px}
+.logbox{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 16px}
+.logbox summary{cursor:pointer;font-weight:600}
+.logbar{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center}
+.logbox textarea{width:100%;height:280px;margin-top:10px;font:12px/1.5 var(--f-mono);background:var(--surface-2);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:10px;resize:vertical}
 .dev{margin:-4px 0 0 28px}
 .meter{height:6px;border-radius:99px;background:var(--surface-2);border:1px solid var(--line);overflow:hidden}
 .meter i{display:block;height:100%;width:0;background:var(--accent);transition:width .08s linear}
@@ -205,6 +210,18 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
       </fieldset>
     </aside>
   </div>
+
+  <details class="logbox" id="logBox">
+    <summary>Logg för felsökning</summary>
+    <p class="note" style="margin-top:8px">Loggen visar vad som händer under inspelningen: inställningar, tider, datamängder och fel. Den innehåller ingen bild eller något ljud. Den töms när du startar en ny inspelning.</p>
+    <div class="logbar">
+      <button class="btn sm" id="logCopy" type="button">Kopiera</button>
+      <button class="btn sm" id="logSave" type="button">Spara som fil</button>
+      <button class="btn sm" id="logClear" type="button">Rensa</button>
+      <span class="status" id="logNote"></span>
+    </div>
+    <textarea id="logText" readonly spellcheck="false" aria-label="Logg"></textarea>
+  </details>
 </div>
 
 <script>
@@ -221,12 +238,52 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
 
   const baseTitle = document.title;
   let downloaded = false;
-  const setState = s => { app.dataset.state = s; if (s !== 'recording' && s !== 'paused') document.title = baseTitle; syncPip(); };
+  const setState = s => { if (app.dataset.state !== s) log('Tillstånd: ' + s); app.dataset.state = s; if (s !== 'recording' && s !== 'paused') document.title = baseTitle; syncPip(); };
   const showWarn = msg => { warn.innerHTML = msg; warn.classList.toggle('show', !!msg); };
   const pad = n => String(n).padStart(2, '0');
   const fmtTime = s => pad(Math.floor(s / 60)) + ':' + pad(Math.floor(s % 60));
   const setAspect = (w, h) => { const r = Math.min(2.4, Math.max(0.45, w / h)); const st = $('#stage'); st.style.setProperty('--ar', w + ' / ' + h); st.style.setProperty('--arn', r); if (r !== w / h) st.style.setProperty('--ar', String(r)); };
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  /* ---------- diagnostic log ---------- */
+  const logLines = [], diag = { draws: 0, lastDraw: 0, lastStats: 0, bytes: 0, gaps: 0 };
+  let logT0 = performance.now();
+  const logBox = $('#logBox'), logText = $('#logText');
+  function renderLog() { logText.value = logLines.join('\n'); logText.scrollTop = logText.scrollHeight; }
+  function log(msg) {
+    try {
+      logLines.push('[' + ((performance.now() - logT0) / 1000).toFixed(2).padStart(7) + 's] ' + msg);
+      if (logLines.length > 2500) logLines.shift();
+      if (logBox.open) renderLog();
+    } catch (e) {}
+  }
+  function logStats() {
+    const q = screenVideo && screenVideo.getVideoPlaybackQuality ? screenVideo.getVideoPlaybackQuality() : null;
+    const ct = canvasStream && canvasStream.getVideoTracks()[0];
+    log('Status: tid=' + elapsed.toFixed(1) + 's, data=' + (diag.bytes / 1048576).toFixed(2) + ' MB i ' + chunks.length + ' delar, ritat=' + diag.draws +
+      ', skärmbilder=' + (q ? q.totalVideoFrames + ' (tappade ' + q.droppedVideoFrames + ')' : '?') +
+      ', ljud=' + (audioCtx ? audioCtx.state : '-') + ', flik=' + document.visibilityState +
+      ', inspelare=' + (recorder ? recorder.state : '-') + ', canvasspår=' + (ct ? ct.readyState : '-'));
+  }
+  function resetLog() {
+    logLines.length = 0; logT0 = performance.now(); Object.assign(diag, { draws: 0, lastDraw: 0, lastStats: 0, bytes: 0, gaps: 0 });
+    log('Start ' + new Date().toLocaleString('sv-SE'));
+    log('Webbläsare: ' + navigator.userAgent);
+    log('Skärm: ' + screen.width + 'x' + screen.height + ' @' + devicePixelRatio + 'x, säker sida=' + isSecureContext + ', adress=' + location.origin);
+    log('Stöd: MediaRecorder=' + !!window.MediaRecorder + ', flytande kontroller=' + ('documentPictureInPicture' in window));
+  }
+  logBox.addEventListener('toggle', () => { if (logBox.open) renderLog(); });
+  const logNote = msg => { $('#logNote').textContent = msg; setTimeout(() => { $('#logNote').textContent = ''; }, 2500); };
+  $('#logCopy').addEventListener('click', async () => {
+    const text = logLines.join('\n');
+    try { await navigator.clipboard.writeText(text); logNote('Kopierad'); }
+    catch (e) { logText.focus(); logText.select(); logNote(document.execCommand('copy') ? 'Kopierad' : 'Markera texten och kopiera själv'); }
+  });
+  $('#logSave').addEventListener('click', () => { save(new Blob([logLines.join('\n')], { type: 'text/plain' }), 'skarminspelare-logg.txt'); });
+  $('#logClear').addEventListener('click', () => { logLines.length = 0; renderLog(); });
+  document.addEventListener('visibilitychange', () => log('Flik: ' + document.visibilityState));
+  window.addEventListener('error', e => log('FEL: ' + e.message + ' (' + (e.filename || '').split('/').pop() + ':' + e.lineno + ')'));
+  window.addEventListener('unhandledrejection', e => log('FEL (löfte): ' + (e.reason && (e.reason.message || e.reason.name) || e.reason)));
 
   /* ---------- remembered settings ---------- */
   const SETTINGS = ['optMic', 'optSys', 'optCam', 'micDev', 'camDev', 'camPos', 'camSize', 'fmt', 'optCount', 'optPip'];
@@ -335,6 +392,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
     starting = true;
     // A floating window may only be opened straight from a click, so ask for it now and close it again
     // once we know the whole screen is shared.
+    resetLog();
     pipDecided = false; pipDismissed = false;
     if ($('#optPip').checked && 'documentPictureInPicture' in window) openPip(true); else pipDecided = true;
     try { await run(); }
@@ -352,6 +410,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
         video: { frameRate: 30 }, audio: $('#optSys').checked
       });
     } catch (e) {
+      log('Skärmdelning misslyckades: ' + (e && e.name) + ' ' + (e && e.message || ''));
       cleanup();
       if (e && e.name === 'NotAllowedError') {
         showWarn('Ingen skärm delades. Om du inte avbröt själv blockerar sidan skärmdelning. Spara filen på din dator och öppna den direkt i webbläsaren, inte i en förhandsvisning.');
@@ -360,6 +419,9 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
     }
     // floating controls only make sense when the shared surface does not include them (not the whole screen)
     const surface = (displayStream.getVideoTracks()[0].getSettings() || {}).displaySurface;
+    { const vt = displayStream.getVideoTracks()[0], vs = vt.getSettings() || {};
+      log('Skärmdelning: yta=' + (surface || 'okänd') + ', ' + vs.width + 'x' + vs.height + ' @' + (vs.frameRate || '?') + ' fps, ljudspår=' + displayStream.getAudioTracks().length);
+      ['ended', 'mute', 'unmute'].forEach(ev => vt.addEventListener(ev, () => log('Skärmspår: ' + ev))); }
     pipAllowed = 'documentPictureInPicture' in window && surface !== 'monitor';
     pipDecided = true; pipDismissed = false;
     if (!pipAllowed) closePip();
@@ -386,6 +448,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
     canvas.width = Math.max(160, Math.round(sw * k / 2) * 2); canvas.height = Math.max(160, Math.round(sh * k / 2) * 2);
     setAspect(canvas.width, canvas.height);
     liveCanvas = canvas;
+    log('Canvas ' + canvas.width + 'x' + canvas.height + ' från källa ' + sw + 'x' + sh);
     const ctx = canvas.getContext('2d');
     const draw = () => drawComposite(ctx, canvas);
     draw();
@@ -393,6 +456,10 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
     worker = new Worker(URL.createObjectURL(new Blob(['setInterval(()=>postMessage(0),33)'], { type: 'text/javascript' })));
     worker.onmessage = () => {
       draw();
+      const now = performance.now();
+      if (diag.lastDraw && now - diag.lastDraw > 250 && diag.gaps < 40) { diag.gaps++; log('Ritningen låg nere i ' + Math.round(now - diag.lastDraw) + ' ms (flik: ' + document.visibilityState + ')'); }
+      diag.lastDraw = now; diag.draws++;
+      if (now - diag.lastStats > 1000 && (app.dataset.state === 'recording' || app.dataset.state === 'paused')) { diag.lastStats = now; logStats(); }
       if (Date.now() - lastMeter > 90) { lastMeter = Date.now(); updateMeter(); }
       if (Date.now() - lastTick > 250) { lastTick = Date.now(); if (['recording', 'paused'].includes(app.dataset.state)) updateTimer(); }
     };
@@ -409,6 +476,10 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     audioDest = audioCtx.createMediaStreamDestination();
     audioCtx.resume().catch(() => {});
+    { const ac = audioCtx; log('AudioContext: ' + ac.state); ac.onstatechange = () => log('AudioContext: ' + ac.state); }
+    // Keep a silent source running: an audio track that delivers no samples can make the recorder cut the file short.
+    const keep = audioCtx.createConstantSource(), keepGain = audioCtx.createGain();
+    keepGain.gain.value = 0; keep.connect(keepGain); keepGain.connect(audioDest); keep.start();
     const sysTracks = displayStream.getAudioTracks();
     if (sysTracks.length) {
       sysGain = audioCtx.createGain();
@@ -422,6 +493,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
     $('#optSys').disabled = !sysGain;
     if ($('#optMic').checked) await setMic(true);
     tracks.push(audioDest.stream.getAudioTracks()[0]);
+    log('Källor: mikrofon=' + !!micStream + ', systemljud=' + !!sysGain + ', kamera=' + !!camStream + ', spår i inspelningen=' + tracks.length);
 
     // countdown
     cancelCountdown = false;
@@ -441,9 +513,13 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
       if (alt) mime = alt;
     }
     recorder = new MediaRecorder(new MediaStream(tracks), { mimeType: mime, videoBitsPerSecond: 5e6, audioBitsPerSecond: 128e3 });
-    recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
+    log('Inspelare: ' + mime + ', ' + (5e6 / 1e6) + ' Mbit/s video');
+    recorder.ondataavailable = e => { if (e.data && e.data.size) { chunks.push(e.data); diag.bytes += e.data.size; } log('Data: ' + (e.data ? e.data.size : 0) + ' byte (totalt ' + (diag.bytes / 1048576).toFixed(2) + ' MB)'); };
+    recorder.onstart = () => log('Inspelare: start');
+    recorder.onpause = () => log('Inspelare: paus');
+    recorder.onresume = () => log('Inspelare: fortsätt');
     recorder.onstop = finish;
-    recorder.onerror = e => showWarn('Inspelningen avbröts: ' + ((e.error && e.error.message) || 'okänt fel') + '. Prova att välja Alltid WebM under Format.');
+    recorder.onerror = e => { log('FEL från inspelaren: ' + ((e.error && (e.error.name + ' ' + e.error.message)) || 'okänt')); showWarn('Inspelningen avbröts: ' + ((e.error && e.error.message) || 'okänt fel') + '. Prova att välja Alltid WebM under Format.'); };
     recorder.start(1000);
     t0 = Date.now(); pausedMs = 0;
     setState('recording');
@@ -465,10 +541,10 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
       const v = document.createElement('video');
       v.muted = true; v.playsInline = true; v.srcObject = st;
       await v.play().catch(() => {});
-      camStream = st; camVideo = v; return true;
+      camStream = st; camVideo = v; log('Kamera: på'); return true;
     } catch (e) {
       camStream = camVideo = null;
-      $('#optCam').checked = false; syncCam(); syncDev();
+      log('Kamera: fel ' + (e && e.name)); $('#optCam').checked = false; syncCam(); syncDev();
       showWarn('Webbkameran gick inte att använda, inspelningen fortsätter utan den.');
       return false;
     }
@@ -497,12 +573,12 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
     try {
       const st = await getDevice('audio');
       if (!audioCtx || micStream) { st.getTracks().forEach(t => t.stop()); return !!micStream; }
-      micStream = st; micSrc = audioCtx.createMediaStreamSource(st); micSrc.connect(audioDest);
+      log('Mikrofon: på'); micStream = st; micSrc = audioCtx.createMediaStreamSource(st); micSrc.connect(audioDest);
       micAn = audioCtx.createAnalyser(); micAn.fftSize = 1024; micBuf = new Float32Array(micAn.fftSize); micSrc.connect(micAn);
       return true;
     } catch (e) {
       micStream = micSrc = null;
-      $('#optMic').checked = false; syncDev();
+      log('Mikrofon: fel ' + (e && e.name)); $('#optMic').checked = false; syncDev();
       showWarn('Mikrofonen gick inte att använda, inspelningen fortsätter utan ljud från den.');
       return false;
     }
@@ -588,7 +664,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
     if (pipWin || !(early || pipAllowed)) return;
     documentPictureInPicture.requestWindow({ width: 380, height: 300 }).then(w => {
       if (pipDecided && !pipAllowed) { w.close(); return; }
-      pipWin = w; pipDismissed = false;
+      pipWin = w; pipDismissed = false; log('Flytande kontroller: öppnade');
       const d = w.document;
       d.title = 'Skärminspelare';
       d.head.insertAdjacentHTML('beforeend', '<style>' +
@@ -604,7 +680,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
         '<div class="bar"><span class="dot" id="d"></span><span class="t" id="t">00:00</span><button id="p" type="button">Pausa</button><button id="s" class="stop" type="button">Stoppa</button></div>';
       d.getElementById('p').onclick = () => app.dataset.state === 'paused' ? resume() : pause();
       d.getElementById('s').onclick = stop;
-      w.addEventListener('pagehide', () => { pipWin = null; pipDismissed = true; syncPip(); });
+      w.addEventListener('pagehide', () => { log('Flytande kontroller: stängda'); pipWin = null; pipDismissed = true; syncPip(); });
       syncPip();
     }).catch(() => {});
   }
@@ -630,13 +706,14 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
   pipBtn.addEventListener('click', () => { if (pipWin) { pipDismissed = true; closePip(); syncPip(); } else openPip(); });
 
   function pause() {
-    if (recorder && recorder.state === 'recording') { recorder.pause(); pauseAt = Date.now(); setState('paused'); updateTimer(); }
+    if (recorder && recorder.state === 'recording') { log('Du pausade'); recorder.pause(); pauseAt = Date.now(); setState('paused'); updateTimer(); }
   }
   function resume() {
-    if (recorder && recorder.state === 'paused') { recorder.resume(); pausedMs += Date.now() - pauseAt; setState('recording'); }
+    if (recorder && recorder.state === 'paused') { log('Du fortsatte'); recorder.resume(); pausedMs += Date.now() - pauseAt; setState('recording'); }
   }
   function stop() {
     if (recorder && recorder.state !== 'inactive') {
+      log('Du stoppade efter ' + elapsed.toFixed(1) + ' s');
       if (app.dataset.state === 'paused') pausedMs += Date.now() - pauseAt;
       updateTimer(); clearInterval(tick);
       recorder.stop();
@@ -708,11 +785,12 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
 
   async function finish() {
     const dur = elapsed;
+    log('Inspelaren stoppad: ' + chunks.length + ' delar, ' + (diag.bytes / 1048576).toFixed(2) + ' MB, tid ' + dur.toFixed(1) + ' s');
     cleanup();
     if (!chunks.length) { if (!warn.classList.contains('show')) showWarn('Inspelningen blev tom. Prova att välja Alltid WebM under Format.'); setState('idle'); return; }
     resultBlob = new Blob(chunks, { type: mime.split(';')[0] });
     resultExt = mime.startsWith('video/mp4') ? 'mp4' : 'webm';
-    if (resultExt === 'webm') resultBlob = await fixWebmDuration(resultBlob, dur * 1000);
+    if (resultExt === 'webm') { const before = resultBlob.size; resultBlob = await fixWebmDuration(resultBlob, dur * 1000); log('WebM-längd: filen ändrades med ' + (resultBlob.size - before) + ' byte'); }
     downloaded = false;
     if (resultUrl) URL.revokeObjectURL(resultUrl);
     resultUrl = URL.createObjectURL(resultBlob);
@@ -723,7 +801,8 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
       (resultExt === 'webm' ? '. WebM spelas i de flesta webbläsare. För MP4: kör ffmpeg -i fil.webm fil.mp4' : '.');
     status.textContent = '';
     result.dataset.dur = dur;
-    result.onloadedmetadata = () => { if (result.videoWidth) setAspect(result.videoWidth, result.videoHeight); };
+    result.onloadedmetadata = () => { log('Resultat: längd ' + result.duration + ' s, ' + result.videoWidth + 'x' + result.videoHeight + ', fil ' + resultExt + ' ' + (resultBlob.size / 1048576).toFixed(2) + ' MB'); if (result.videoWidth) setAspect(result.videoWidth, result.videoHeight); };
+    result.onerror = () => log('FEL vid uppspelning av resultatet: ' + (result.error && result.error.message));
     setState('done');
   }
 
