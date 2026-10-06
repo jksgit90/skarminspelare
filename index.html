@@ -123,13 +123,21 @@ select:disabled{opacity:.5}
 .status{font-size:13px;color:var(--ink-2)}
 code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padding:1px 5px;border-radius:5px;overflow-wrap:anywhere}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+.update{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:100;display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;max-width:calc(100vw - 32px);background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:var(--r);padding:10px 14px;box-shadow:0 6px 24px rgba(0,0,0,.28);font-size:14px}
+.update[hidden]{display:none}
 .sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 .steps{margin:0;padding-left:1.2em;text-align:left;color:#9aa7b2;font-size:14px;display:grid;gap:4px}
 .namebar{align-items:center;gap:8px;margin-top:12px;font-size:13px;color:var(--ink-2)}
-.namebar input{font:inherit;color:var(--ink);background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0;flex:1;max-width:340px}
+[data-state="done"] .namebar{display:flex}
+.namebar input{font:inherit;color:var(--ink);background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0;flex:1;max-width:560px}
 </style>
 </head>
 <body>
+<div class="update" id="update" role="status" hidden>
+  <span>Det finns en ny version av appen.</span>
+  <button class="btn sm accent" id="updateGo" type="button">Ladda om</button>
+  <button class="btn sm" id="updateLater" type="button">Senare</button>
+</div>
 <div class="sr-only" id="sr" role="status" aria-live="polite"></div>
 <div class="wrap" id="app" data-state="idle">
   <header>
@@ -270,7 +278,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
   const baseTitle = document.title;
   let downloaded = false;
   const SR_TEXT = { countdown: 'Nedräkning startar', recording: 'Inspelning pågår', paused: 'Inspelningen är pausad', done: 'Inspelningen är klar' };
-  const setState = s => { const prev = app.dataset.state; if (prev !== s) log('Tillstånd: ' + s); { const m = s === 'recording' && prev === 'paused' ? 'Inspelningen fortsätter' : SR_TEXT[s]; if (m && prev !== s) $('#sr').textContent = m; } app.dataset.state = s; syncLocks(s); syncChips(); if (s !== 'recording' && s !== 'paused') document.title = baseTitle; syncPip(); };
+  const setState = s => { const prev = app.dataset.state; if (prev !== s) log('Tillstånd: ' + s); { const m = s === 'recording' && prev === 'paused' ? 'Inspelningen fortsätter' : SR_TEXT[s]; if (m && prev !== s) $('#sr').textContent = m; } app.dataset.state = s; showUpdate(); syncLocks(s); syncChips(); if (s !== 'recording' && s !== 'paused') document.title = baseTitle; syncPip(); };
   const showWarn = msg => { warn.innerHTML = msg; warn.classList.toggle('show', !!msg); };
   const pad = n => String(n).padStart(2, '0');
   const fmtTime = s => pad(Math.floor(s / 60)) + ':' + pad(Math.floor(s % 60));
@@ -853,6 +861,31 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
     const u = URL.createObjectURL(blob), a = document.createElement('a');
     a.href = u; a.download = name; document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(u), 10000);
+  }
+
+  /* ---------- new version notice ---------- */
+  // Compare the published index.html with the copy this page started from. The notice waits while a recording is in progress.
+  let baseHash = null, updateReady = false, updateDismissed = false;
+  const hashText = t => { let h = 5381; for (let i = 0; i < t.length; i++) h = ((h << 5) + h) ^ t.charCodeAt(i); return h >>> 0; };
+  async function pageHash() {
+    const r = await fetch('index.html', { cache: 'no-cache' });
+    if (!r.ok) throw new Error('http ' + r.status);
+    return hashText(await r.text());
+  }
+  function showUpdate() {
+    const st = app.dataset.state;
+    $('#update').hidden = !(updateReady && !updateDismissed && (st === 'idle' || st === 'done'));
+  }
+  async function checkUpdate() {
+    if (updateReady || baseHash === null) return;
+    try { if (await pageHash() !== baseHash) { updateReady = true; log('Ny version finns'); showUpdate(); } } catch (e) {}
+  }
+  $('#updateGo').addEventListener('click', () => location.reload());
+  $('#updateLater').addEventListener('click', () => { updateDismissed = true; showUpdate(); });
+  if (location.protocol.startsWith('http')) {
+    pageHash().then(h => { baseHash = h; }).catch(() => {});
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkUpdate(); });
+    setInterval(checkUpdate, 10 * 60 * 1000);
   }
 
   /* ---------- install as app ---------- */
