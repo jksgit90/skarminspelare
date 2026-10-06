@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Skärminspelare</title>
+<meta name="theme-color" content="#0b0e11">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;600;700&family=Hanken+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
@@ -46,7 +50,7 @@ header p{margin:0;color:var(--ink-2);font-size:14px}
 .stage{position:relative;background:var(--stage);border-radius:var(--r);aspect-ratio:var(--ar,16/9);width:min(100%,calc(70vh * var(--arn,1.7778)));margin-inline:auto;overflow:hidden;display:grid;place-items:center;color:var(--stage-ink)}
 [data-state="countdown"] .stage,[data-state="recording"] .stage,[data-state="paused"] .stage{touch-action:none}
 .stage video{width:100%;height:100%;object-fit:contain;display:block;background:var(--stage)}
-.empty{text-align:center;padding:24px;max-width:34ch;display:grid;gap:8px;justify-items:center}
+.empty{text-align:center;padding:24px;max-width:40ch;display:grid;gap:8px;justify-items:center}
 .empty svg{opacity:.55}
 .empty strong{font:600 18px var(--f-display)}
 .empty span{color:#9aa7b2;font-size:14px}
@@ -118,10 +122,15 @@ select:disabled{opacity:.5}
 .warn.show{display:block}
 .status{font-size:13px;color:var(--ink-2)}
 code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padding:1px 5px;border-radius:5px;overflow-wrap:anywhere}
-@media (prefers-reduced-motion:reduce){.dot{animation:none!important}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+.sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.steps{margin:0;padding-left:1.2em;text-align:left;color:#9aa7b2;font-size:14px;display:grid;gap:4px}
+.namebar{align-items:center;gap:8px;margin-top:12px;font-size:13px;color:var(--ink-2)}
+.namebar input{font:inherit;color:var(--ink);background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0;flex:1;max-width:340px}
 </style>
 </head>
 <body>
+<div class="sr-only" id="sr" role="status" aria-live="polite"></div>
 <div class="wrap" id="app" data-state="idle">
   <header>
     <h1>Skärminspelare</h1>
@@ -141,7 +150,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
         <div class="empty" id="empty">
           <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M8 21h8M12 17v4"/><circle cx="12" cy="10.5" r="2.6" fill="currentColor" stroke="none"/></svg>
           <strong>Redo att spela in</strong>
-          <span>Tryck på Starta, välj vad som ska delas i webbläsarens ruta, så börjar nedräkningen.</span>
+          <ol class="steps"><li>Välj ljud och kamera i panelen.</li><li>Tryck Starta och välj ett fönster eller en flik, så får du flytande kontroller.</li><li>Stoppa när du är klar och ladda ner filen.</li></ol>
         </div>
         <video id="preview" muted playsinline></video>
         <video id="result" controls playsinline></video>
@@ -166,8 +175,9 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
 
         <button class="btn accent only only-done" id="dlBtn" type="button">Ladda ner <span id="dlExt">WEBM</span></button>
         <button class="btn only only-done" id="againBtn" type="button">Ny inspelning</button>
-        <span class="status" id="status"></span>
+        <span class="status" id="status" role="status"></span>
       </div>
+      <div class="namebar only only-done"><label for="fileName">Filnamn</label><input id="fileName" type="text" autocomplete="off" spellcheck="false" maxlength="120"><span id="fileExt">.mp4</span></div>
       <p class="note only-done only" id="doneNote" style="margin-top:12px"></p>
     </section>
 
@@ -259,7 +269,8 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
   }
   const baseTitle = document.title;
   let downloaded = false;
-  const setState = s => { if (app.dataset.state !== s) log('Tillstånd: ' + s); app.dataset.state = s; syncLocks(s); syncChips(); if (s !== 'recording' && s !== 'paused') document.title = baseTitle; syncPip(); };
+  const SR_TEXT = { countdown: 'Nedräkning startar', recording: 'Inspelning pågår', paused: 'Inspelningen är pausad', done: 'Inspelningen är klar' };
+  const setState = s => { const prev = app.dataset.state; if (prev !== s) log('Tillstånd: ' + s); { const m = s === 'recording' && prev === 'paused' ? 'Inspelningen fortsätter' : SR_TEXT[s]; if (m && prev !== s) $('#sr').textContent = m; } app.dataset.state = s; syncLocks(s); syncChips(); if (s !== 'recording' && s !== 'paused') document.title = baseTitle; syncPip(); };
   const showWarn = msg => { warn.innerHTML = msg; warn.classList.toggle('show', !!msg); };
   const pad = n => String(n).padStart(2, '0');
   const fmtTime = s => pad(Math.floor(s / 60)) + ':' + pad(Math.floor(s % 60));
@@ -819,6 +830,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
     resultUrl = URL.createObjectURL(resultBlob);
     result.src = resultUrl;
     $('#dlExt').textContent = resultExt.toUpperCase();
+    $('#fileName').value = baseName(); $('#fileExt').textContent = '.' + resultExt;
     const mb = (resultBlob.size / 1048576).toFixed(1);
     $('#doneNote').textContent = fmtTime(dur) + ' lång, ' + mb + ' MB' +
       (resultExt === 'webm' ? '. WebM spelas i de flesta webbläsare. För MP4: kör ffmpeg -i fil.webm fil.mp4' : '.');
@@ -829,9 +841,13 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
     setState('done');
   }
 
-  function fileName(ext) {
+  function baseName() {
     const d = new Date();
-    return 'skarminspelning-' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + '.' + ext;
+    return 'skarminspelning-' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes());
+  }
+  function downloadName() {
+    const clean = $('#fileName').value.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').replace(/^\.+/, '').trim();
+    return (clean || baseName()) + '.' + resultExt;
   }
   function save(blob, name) {
     const u = URL.createObjectURL(blob), a = document.createElement('a');
@@ -839,13 +855,17 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
     setTimeout(() => URL.revokeObjectURL(u), 10000);
   }
 
+  /* ---------- install as app ---------- */
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
+
   /* ---------- wiring ---------- */
   $('#startBtn').addEventListener('click', start);
   $('#pauseBtn').addEventListener('click', pause);
   $('#resumeBtn').addEventListener('click', resume);
   $('#stopBtn').addEventListener('click', stop);
   $('#cancelBtn').addEventListener('click', () => { cancelCountdown = true; });
-  $('#dlBtn').addEventListener('click', () => { save(resultBlob, fileName(resultExt)); downloaded = true; });
+  $('#dlBtn').addEventListener('click', () => { const name = downloadName(); save(resultBlob, name); downloaded = true; status.textContent = 'Sparad som ' + name + ' (i mappen för nedladdningar).'; });
+  $('#fileName').addEventListener('keydown', e => { if (e.key === 'Enter') $('#dlBtn').click(); });
   $('#againBtn').addEventListener('click', () => { if (!downloaded && !confirm('Du har inte sparat inspelningen. Vill du kasta den och börja om?')) return; result.pause(); result.removeAttribute('src'); status.textContent = ''; showWarn(''); setState('idle'); $('#stage').style.removeProperty('--ar'); $('#stage').style.removeProperty('--arn'); });
   // closing the tab would throw away a recording that is running or not yet saved
   window.addEventListener('beforeunload', e => {
