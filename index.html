@@ -212,12 +212,29 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
   let pipWin = null, pipAllowed = false, pipDecided = true, pipDismissed = false, lastTick = 0;
   let resultUrl = '', resultBlob = null, resultExt = 'webm', cancelCountdown = false;
 
-  const setState = s => { app.dataset.state = s; syncPip(); };
+  const baseTitle = document.title;
+  let downloaded = false;
+  const setState = s => { app.dataset.state = s; if (s !== 'recording' && s !== 'paused') document.title = baseTitle; syncPip(); };
   const showWarn = msg => { warn.innerHTML = msg; warn.classList.toggle('show', !!msg); };
   const pad = n => String(n).padStart(2, '0');
   const fmtTime = s => pad(Math.floor(s / 60)) + ':' + pad(Math.floor(s % 60));
   const setAspect = (w, h) => { const r = Math.min(2.4, Math.max(0.45, w / h)); const st = $('#stage'); st.style.setProperty('--ar', w + ' / ' + h); st.style.setProperty('--arn', r); if (r !== w / h) st.style.setProperty('--ar', String(r)); };
   const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  /* ---------- remembered settings ---------- */
+  const SETTINGS = ['optMic', 'optSys', 'optCam', 'camPos', 'camSize', 'fmt', 'optCount', 'optPip'];
+  try {
+    const saved = JSON.parse(localStorage.getItem('settings') || '{}');
+    SETTINGS.forEach(id => {
+      const el = $('#' + id);
+      if (!el || !(id in saved)) return;
+      if (el.type === 'checkbox') el.checked = !!saved[id];
+      else if (saved[id] !== 'custom' && [...el.options].some(o => o.value === saved[id])) el.value = saved[id];
+    });
+  } catch (e) {}
+  $('aside').addEventListener('change', () => {
+    try { localStorage.setItem('settings', JSON.stringify(Object.fromEntries(SETTINGS.map(id => { const el = $('#' + id); return [id, el.type === 'checkbox' ? el.checked : el.value]; })))); } catch (e) {}
+  });
 
   /* ---------- theme ---------- */
   const themeBox = $('#theme'), themeBtns = [...themeBox.querySelectorAll('button')];
@@ -443,6 +460,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
   /* ---------- movable camera bubble ---------- */
   const PRESETS = { br: [1, 1], bl: [0, 1], tr: [1, 0], tl: [0, 0] };
   const camPos = $('#camPos'), stageEl = $('#stage');
+  { const p0 = PRESETS[camPos.value]; if (p0) [camFx, camFy] = p0; }
   camPos.addEventListener('change', () => { const p = PRESETS[camPos.value]; if (p) [camFx, camFy] = p; });
   let drag = null;
   const live = () => ['countdown', 'recording', 'paused'].includes(app.dataset.state) && camVideo && liveCanvas;
@@ -497,6 +515,7 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
     const ms = (app.dataset.state === 'paused' ? pauseAt : Date.now()) - t0 - pausedMs;
     elapsed = Math.max(0, ms / 1000);
     $('#timer').textContent = $('#badgeTime').textContent = fmtTime(elapsed);
+    if (app.dataset.state === 'recording' || app.dataset.state === 'paused') document.title = (app.dataset.state === 'paused' ? '⏸ ' : '● ') + fmtTime(elapsed) + ' · ' + baseTitle;
     syncPip();
   }
 
@@ -573,12 +592,64 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
     preview.srcObject = null;
   }
 
-  function finish() {
+  // Chrome writes WebM without a length, which breaks the timeline and seeking. Insert a Duration element.
+  async function fixWebmDuration(blob, ms) {
+    try {
+      const buf = new Uint8Array(await blob.arrayBuffer());
+      const vint = p => {
+        const b = buf[p]; let len = 1;
+        while (len <= 8 && !(b & (0x100 >> len))) len++;
+        if (len > 8) return null;
+        const mask = (0x100 >> len) - 1; let v = b & mask, all = v === mask;
+        for (let i = 1; i < len; i++) { v = v * 256 + buf[p + i]; if (buf[p + i] !== 255) all = false; }
+        return { len, value: v, unknown: all };
+      };
+      const elem = p => {
+        const b = buf[p]; let il = 1;
+        while (il <= 4 && !(b & (0x100 >> il))) il++;
+        if (il > 4) return null;
+        let id = 0; for (let i = 0; i < il; i++) id = id * 256 + buf[p + i];
+        const sz = vint(p + il); if (!sz) return null;
+        return { id, idLen: il, sizeLen: sz.len, size: sz.value, unknown: sz.unknown, data: p + il + sz.len };
+      };
+      const head = elem(0); if (!head || head.id !== 0x1A45DFA3) return blob;
+      const seg = elem(head.data + head.size); if (!seg || seg.id !== 0x18538067 || !seg.unknown) return blob;
+      let p = seg.data, info = null;
+      for (let n = 0; n < 40 && p < buf.length; n++) {
+        const e = elem(p); if (!e || e.unknown) return blob;
+        if (e.id === 0x1549A966) { info = e; break; }
+        p = e.data + e.size;
+      }
+      if (!info) return blob;
+      let scale = 1000000;
+      for (let q = info.data; q < info.data + info.size;) {
+        const e = elem(q); if (!e || e.unknown) return blob;
+        if (e.id === 0x4489) return blob; // already has a duration
+        if (e.id === 0x2AD7B1) { scale = 0; for (let i = 0; i < e.size; i++) scale = scale * 256 + buf[e.data + i]; }
+        q = e.data + e.size;
+      }
+      const dur = new Uint8Array(11);
+      dur.set([0x44, 0x89, 0x88]);
+      new DataView(dur.buffer).setFloat64(3, ms * 1e6 / scale);
+      const newSize = info.size + dur.length;
+      let len = info.sizeLen;
+      while (newSize > Math.pow(2, 7 * len) - 2) len++;
+      const sizeBytes = new Uint8Array(len);
+      for (let i = len - 1, v = newSize; i >= 0; i--) { sizeBytes[i] = v % 256; v = Math.floor(v / 256); }
+      sizeBytes[0] |= 0x80 >> (len - 1);
+      const infoEnd = info.data + info.size;
+      return new Blob([buf.subarray(0, info.data - info.sizeLen), sizeBytes, buf.subarray(info.data, infoEnd), dur, buf.subarray(infoEnd)], { type: blob.type });
+    } catch (e) { return blob; }
+  }
+
+  async function finish() {
     const dur = elapsed;
     cleanup();
     if (!chunks.length) { if (!warn.classList.contains('show')) showWarn('Inspelningen blev tom. Prova att välja Alltid WebM under Format.'); setState('idle'); return; }
     resultBlob = new Blob(chunks, { type: mime.split(';')[0] });
     resultExt = mime.startsWith('video/mp4') ? 'mp4' : 'webm';
+    if (resultExt === 'webm') resultBlob = await fixWebmDuration(resultBlob, dur * 1000);
+    downloaded = false;
     if (resultUrl) URL.revokeObjectURL(resultUrl);
     resultUrl = URL.createObjectURL(resultBlob);
     result.src = resultUrl;
@@ -608,8 +679,13 @@ code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);padd
   $('#resumeBtn').addEventListener('click', resume);
   $('#stopBtn').addEventListener('click', stop);
   $('#cancelBtn').addEventListener('click', () => { cancelCountdown = true; });
-  $('#dlBtn').addEventListener('click', () => save(resultBlob, fileName(resultExt)));
+  $('#dlBtn').addEventListener('click', () => { save(resultBlob, fileName(resultExt)); downloaded = true; });
   $('#againBtn').addEventListener('click', () => { result.pause(); result.removeAttribute('src'); status.textContent = ''; showWarn(''); setState('idle'); $('#stage').style.removeProperty('--ar'); $('#stage').style.removeProperty('--arn'); });
+  // closing the tab would throw away a recording that is running or not yet saved
+  window.addEventListener('beforeunload', e => {
+    const st = app.dataset.state;
+    if (st === 'countdown' || st === 'recording' || st === 'paused' || (st === 'done' && !downloaded)) { e.preventDefault(); e.returnValue = ''; }
+  });
   window.addEventListener('keydown', e => {
     if (e.code === 'Escape' && app.dataset.state === 'countdown') { cancelCountdown = true; return; }
     if (e.target.matches('input,select,textarea')) return;
